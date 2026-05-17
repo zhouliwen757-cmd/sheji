@@ -70,7 +70,7 @@ public class UserService {
                 user.getEmail(),
                 user.getAvatarUrl(),
                 user.getCreatedAt() != null ? user.getCreatedAt().toString() : null,
-                user.getRole()
+                user.getRole().name()
         );
     }
 }

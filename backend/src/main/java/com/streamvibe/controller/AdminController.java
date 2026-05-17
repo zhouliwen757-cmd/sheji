@@ -52,7 +52,8 @@ public class AdminController {
                 if (!"USER".equals(role) && !"ADMIN".equals(role)) {
                     return ResponseEntity.badRequest().body(Map.of("success", false, "message", "无效的角色"));
                 }
-                user.setRole(role);
+                User.Role newRole = "ADMIN".equals(role) ? User.Role.admin : User.Role.user;
+                user.setRole(newRole);
                 userRepository.save(user);
                 return ResponseEntity.ok(Map.of("success", true, "message", "角色更新成功"));
             })
@@ -64,7 +65,8 @@ public class AdminController {
     public ResponseEntity<?> toggleUserStatus(@PathVariable @NonNull Long id, @RequestBody Map<String, Boolean> request) {
         return userRepository.findById(id)
             .map(user -> {
-                user.setRole(request.getOrDefault("disabled", false) ? "DISABLED" : "USER");
+                Boolean disabled = request.getOrDefault("disabled", false);
+                user.setStatus(disabled ? User.Status.banned : User.Status.active);
                 userRepository.save(user);
                 return ResponseEntity.ok(Map.of("success", true, "message", "状态更新成功"));
             })
@@ -130,7 +132,7 @@ public class AdminController {
         stats.put("totalVideos", 0);
         stats.put("totalComments", 0);
         stats.put("activeUsers", userRepository.findAll().stream()
-            .filter(u -> !"DISABLED".equals(u.getRole()))
+            .filter(u -> u.getStatus() != User.Status.banned)
             .count());
         return ResponseEntity.ok(Map.of("success", true, "stats", stats));
     }
@@ -143,7 +145,7 @@ public class AdminController {
         map.put("email", user.getEmail());
         map.put("phone", user.getPhone());
         map.put("avatarUrl", user.getAvatarUrl());
-        map.put("role", user.getRole());
+        map.put("role", user.getRole().name());
         map.put("createdAt", user.getCreatedAt());
         return map;
     }

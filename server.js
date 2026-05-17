@@ -228,7 +228,7 @@ const pool = mysql.createPool({
     queueLimit: 0
 });
 
-// Initialize Database
+// Initialize Database - 完善版
 async function initDatabase() {
     try {
         logger.info('Initializing database...');
@@ -246,95 +246,251 @@ async function initDatabase() {
         
         logger.info('Database connection established');
 
-        // Create users table
+        // ==================== 用户表 ====================
         await connection.query(`
             CREATE TABLE IF NOT EXISTS users (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                username VARCHAR(50) UNIQUE NOT NULL,
-                nickname VARCHAR(50),
-                email VARCHAR(100) UNIQUE NOT NULL,
-                password VARCHAR(255) NOT NULL,
+                id INT AUTO_INCREMENT PRIMARY KEY COMMENT '用户ID',
+                username VARCHAR(50) UNIQUE NOT NULL COMMENT '用户名',
+                nickname VARCHAR(100) COMMENT '昵称',
+                email VARCHAR(100) UNIQUE NOT NULL COMMENT '邮箱',
+                password VARCHAR(255) NOT NULL COMMENT '密码',
                 password_sha256 VARCHAR(64) DEFAULT NULL,
-                phone VARCHAR(20),
-                avatar_url VARCHAR(255) DEFAULT NULL,
-                role ENUM('admin', 'user') DEFAULT 'user',
+                phone VARCHAR(20) COMMENT '手机号',
+                avatar_url VARCHAR(500) DEFAULT NULL COMMENT '头像URL',
+                bio TEXT COMMENT '个人简介',
+                gender ENUM('male', 'female', 'other', 'secret') DEFAULT 'secret' COMMENT '性别',
+                
+                -- 社交统计
+                subscribers_count INT DEFAULT 0 COMMENT '粉丝数',
+                following_count INT DEFAULT 0 COMMENT '关注数',
+                video_count INT DEFAULT 0 COMMENT '作品数',
+                total_views BIGINT DEFAULT 0 COMMENT '总播放量',
+                
+                -- 账户状态
+                role ENUM('admin', 'user', 'vip') DEFAULT 'user' COMMENT '角色',
+                status ENUM('active', 'banned', 'inactive') DEFAULT 'active' COMMENT '状态',
+                
+                -- 安全
+                last_login_ip VARCHAR(45) DEFAULT NULL,
+                last_login_time DATETIME DEFAULT NULL,
+                
+                -- 时间戳
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                
                 INDEX idx_username (username),
-                INDEX idx_email (email)
+                INDEX idx_email (email),
+                INDEX idx_status (status),
+                INDEX idx_role (role)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         `);
-        
-        // Add password_sha256 column if it doesn't exist
-        try {
-            const [columns] = await connection.query('SHOW COLUMNS FROM users LIKE ?', ['password_sha256']);
-            if (columns.length === 0) {
-                await connection.query(`
-                    ALTER TABLE users ADD COLUMN password_sha256 VARCHAR(64) DEFAULT NULL AFTER password
-                `);
-            }
-        } catch (e) {
-            // Column might already exist, ignore error
-        }
 
-        // Create videos table
+        // ==================== 视频表 ====================
         await connection.query(`
             CREATE TABLE IF NOT EXISTS videos (
                 id INT AUTO_INCREMENT PRIMARY KEY,
-                title VARCHAR(255) NOT NULL,
-                description TEXT,
-                video_url VARCHAR(500) NOT NULL,
-                thumbnail_url VARCHAR(500),
-                duration VARCHAR(20),
-                category VARCHAR(50),
-                tags JSON,
-                quality VARCHAR(20) DEFAULT '1080P',
-                views INT DEFAULT 0,
+                video_id VARCHAR(32) UNIQUE NOT NULL COMMENT '视频唯一标识',
+                title VARCHAR(255) NOT NULL COMMENT '标题',
+                description TEXT COMMENT '描述',
+                
+                -- 媒体资源
+                video_url VARCHAR(500) NOT NULL COMMENT '视频地址',
+                video_path VARCHAR(500) DEFAULT NULL COMMENT '服务器存储路径',
+                thumbnail_url VARCHAR(500) DEFAULT NULL COMMENT '封面URL',
+                thumbnail_path VARCHAR(500) DEFAULT NULL COMMENT '封面存储路径',
+                
+                -- 视频属性
+                duration VARCHAR(20) COMMENT '时长',
+                duration_seconds INT DEFAULT 0 COMMENT '时长（秒）',
+                file_size BIGINT DEFAULT 0 COMMENT '文件大小',
+                width INT DEFAULT 0 COMMENT '宽度',
+                height INT DEFAULT 0 COMMENT '高度',
+                quality VARCHAR(20) DEFAULT '1080P' COMMENT '画质',
+                codec VARCHAR(50) DEFAULT NULL COMMENT '编码',
+                
+                -- 分类标签
+                category VARCHAR(50) COMMENT '分类',
+                tags JSON COMMENT '标签',
+                
+                -- 统计数据
+                views INT DEFAULT 0 COMMENT '播放次数',
+                likes_count INT DEFAULT 0 COMMENT '点赞数',
+                favorites_count INT DEFAULT 0 COMMENT '收藏数',
+                comments_count INT DEFAULT 0 COMMENT '评论数',
+                shares_count INT DEFAULT 0 COMMENT '分享数',
+                
+                -- 用户
                 user_id INT NOT NULL,
-                status ENUM('pending', 'approved', 'rejected') DEFAULT 'approved',
+                
+                -- 审核
+                status ENUM('pending', 'approved', 'rejected', 'deleted') DEFAULT 'approved',
+                
+                -- 推荐
+                weight INT DEFAULT 0 COMMENT '权重',
+                hot_score DOUBLE DEFAULT 0 COMMENT '热度分数',
+                
+                -- 时间戳
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                published_at DATETIME DEFAULT NULL COMMENT '发布时间',
+                
+                INDEX idx_video_id (video_id),
                 INDEX idx_user_id (user_id),
                 INDEX idx_category (category),
                 INDEX idx_status (status),
-                INDEX idx_title (title),
+                INDEX idx_views (views DESC),
+                INDEX idx_likes_count (likes_count DESC),
+                INDEX idx_created_at (created_at DESC),
                 FULLTEXT idx_search (title, description),
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         `);
 
-        // Create admin user if not exists
-        const [adminExists] = await connection.query('SELECT id FROM users WHERE username = ?', ['admin']);
-        if (adminExists.length === 0) {
-            const hashedPassword = await bcrypt.hash(config.adminPassword, 10);
-            await connection.query(
-                'INSERT INTO users (username, nickname, email, password, role) VALUES (?, ?, ?, ?, ?)',
-                ['admin', '管理员', 'admin@streamvibe.com', hashedPassword, 'admin']
-            );
-            console.log(`Admin user created: admin / ${config.adminPassword}`);
+        // 添加视频表新字段（兼容旧数据库）
+        const videoNewColumns = [
+            { name: 'video_id', sql: 'ALTER TABLE videos ADD COLUMN video_id VARCHAR(32) UNIQUE DEFAULT NULL AFTER id' },
+            { name: 'duration_seconds', sql: 'ALTER TABLE videos ADD COLUMN duration_seconds INT DEFAULT 0' },
+            { name: 'file_size', sql: 'ALTER TABLE videos ADD COLUMN file_size BIGINT DEFAULT 0' },
+            { name: 'width', sql: 'ALTER TABLE videos ADD COLUMN width INT DEFAULT 0' },
+            { name: 'height', sql: 'ALTER TABLE videos ADD COLUMN height INT DEFAULT 0' },
+            { name: 'codec', sql: 'ALTER TABLE videos ADD COLUMN codec VARCHAR(50) DEFAULT NULL' },
+            { name: 'favorites_count', sql: 'ALTER TABLE videos ADD COLUMN favorites_count INT DEFAULT 0' },
+            { name: 'comments_count', sql: 'ALTER TABLE videos ADD COLUMN comments_count INT DEFAULT 0' },
+            { name: 'shares_count', sql: 'ALTER TABLE videos ADD COLUMN shares_count INT DEFAULT 0' },
+            { name: 'published_at', sql: 'ALTER TABLE videos ADD COLUMN published_at DATETIME DEFAULT NULL' },
+            { name: 'weight', sql: 'ALTER TABLE videos ADD COLUMN weight INT DEFAULT 0' },
+            { name: 'hot_score', sql: 'ALTER TABLE videos ADD COLUMN hot_score DOUBLE DEFAULT 0' }
+        ];
+        
+        for (const col of videoNewColumns) {
+            try {
+                const [exists] = await connection.query(
+                    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'videos' AND COLUMN_NAME = ?`,
+                    ['streamvibe', col.name.split(' ')[3]]
+                );
+                if (exists.length === 0) {
+                    await connection.query(col.sql);
+                }
+            } catch (e) {
+                // 忽略错误
+            }
         }
 
-        // Create comments table
+        // 为现有视频生成 video_id
+        try {
+            await connection.query(`
+                UPDATE videos SET video_id = CONCAT('v', UNIX_TIMESTAMP(created_at), FLOOR(RAND() * 1000))
+                WHERE video_id IS NULL
+            `);
+        } catch (e) {
+            // 忽略错误
+        }
+
+        // ==================== 评论表 ====================
         await connection.query(`
             CREATE TABLE IF NOT EXISTS comments (
                 id INT AUTO_INCREMENT PRIMARY KEY,
+                comment_id VARCHAR(32) UNIQUE NOT NULL COMMENT '评论唯一标识',
                 video_id INT NOT NULL,
                 user_id INT NOT NULL,
-                content TEXT NOT NULL,
+                parent_id INT DEFAULT NULL COMMENT '父评论ID',
+                root_id INT DEFAULT NULL COMMENT '根评论ID',
+                content TEXT NOT NULL COMMENT '内容',
+                content_length INT DEFAULT 0 COMMENT '内容长度',
+                
+                -- 互动
+                likes_count INT DEFAULT 0 COMMENT '点赞数',
+                replies_count INT DEFAULT 0 COMMENT '回复数',
+                
+                -- 属性
+                type ENUM('normal', 'reply', 'system') DEFAULT 'normal',
+                is_top TINYINT(1) DEFAULT 0 COMMENT '置顶',
+                is_hot TINYINT(1) DEFAULT 0 COMMENT '热评',
+                is_deleted TINYINT(1) DEFAULT 0 COMMENT '已删除',
+                
+                -- 安全
+                ip_address VARCHAR(45) DEFAULT NULL,
+                
+                -- 时间戳
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                
+                INDEX idx_comment_id (comment_id),
                 INDEX idx_video_id (video_id),
                 INDEX idx_user_id (user_id),
+                INDEX idx_parent_id (parent_id),
+                INDEX idx_root_id (root_id),
+                INDEX idx_likes_count (likes_count DESC),
+                INDEX idx_created_at (created_at DESC),
                 FOREIGN KEY (video_id) REFERENCES videos(id) ON DELETE CASCADE,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         `);
 
-        // Create favorites table
+        // 添加评论表新字段
+        const commentNewColumns = [
+            { name: 'comment_id', sql: 'ALTER TABLE comments ADD COLUMN comment_id VARCHAR(32) UNIQUE DEFAULT NULL' },
+            { name: 'parent_id', sql: 'ALTER TABLE comments ADD COLUMN parent_id INT DEFAULT NULL' },
+            { name: 'root_id', sql: 'ALTER TABLE comments ADD COLUMN root_id INT DEFAULT NULL' },
+            { name: 'content_length', sql: 'ALTER TABLE comments ADD COLUMN content_length INT DEFAULT 0' },
+            { name: 'likes_count', sql: 'ALTER TABLE comments ADD COLUMN likes_count INT DEFAULT 0' },
+            { name: 'replies_count', sql: 'ALTER TABLE comments ADD COLUMN replies_count INT DEFAULT 0' },
+            { name: 'type', sql: "ALTER TABLE comments ADD COLUMN type ENUM('normal', 'reply', 'system') DEFAULT 'normal'" },
+            { name: 'is_top', sql: 'ALTER TABLE comments ADD COLUMN is_top TINYINT(1) DEFAULT 0' },
+            { name: 'is_hot', sql: 'ALTER TABLE comments ADD COLUMN is_hot TINYINT(1) DEFAULT 0' },
+            { name: 'is_deleted', sql: 'ALTER TABLE comments ADD COLUMN is_deleted TINYINT(1) DEFAULT 0' },
+            { name: 'ip_address', sql: 'ALTER TABLE comments ADD COLUMN ip_address VARCHAR(45) DEFAULT NULL' }
+        ];
+        
+        for (const col of commentNewColumns) {
+            try {
+                const colName = col.name;
+                const [exists] = await connection.query(
+                    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'comments' AND COLUMN_NAME = ?`,
+                    ['streamvibe', colName]
+                );
+                if (exists.length === 0) {
+                    await connection.query(col.sql);
+                }
+            } catch (e) {
+                // 忽略错误
+            }
+        }
+
+        // 为现有评论生成 comment_id
+        try {
+            await connection.query(`
+                UPDATE comments SET comment_id = CONCAT('c', UNIX_TIMESTAMP(created_at), FLOOR(RAND() * 1000))
+                WHERE comment_id IS NULL
+            `);
+        } catch (e) {
+            // 忽略错误
+        }
+
+        // ==================== 点赞表 ====================
+        await connection.query(`
+            CREATE TABLE IF NOT EXISTS likes (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT NOT NULL,
+                video_id INT NOT NULL,
+                type ENUM('like', 'dislike') DEFAULT 'like',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY unique_like (user_id, video_id, type),
+                INDEX idx_user_id (user_id),
+                INDEX idx_video_id (video_id),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (video_id) REFERENCES videos(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+
+        // ==================== 收藏表 ====================
         await connection.query(`
             CREATE TABLE IF NOT EXISTS favorites (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 user_id INT NOT NULL,
                 video_id INT NOT NULL,
+                collection_id INT DEFAULT NULL COMMENT '收藏夹ID',
+                note VARCHAR(255) DEFAULT NULL COMMENT '备注',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE KEY unique_favorite (user_id, video_id),
                 INDEX idx_user_id (user_id),
@@ -344,39 +500,29 @@ async function initDatabase() {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         `);
 
-        // Create likes table (video likes)
+        // ==================== 收藏夹表 ====================
         await connection.query(`
-            CREATE TABLE IF NOT EXISTS likes (
+            CREATE TABLE IF NOT EXISTS collections (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 user_id INT NOT NULL,
-                video_id INT NOT NULL,
+                name VARCHAR(100) NOT NULL COMMENT '收藏夹名称',
+                description TEXT COMMENT '描述',
+                cover_url VARCHAR(500) DEFAULT NULL,
+                is_public TINYINT(1) DEFAULT 1,
+                video_count INT DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE KEY unique_like (user_id, video_id),
                 INDEX idx_user_id (user_id),
-                INDEX idx_video_id (video_id),
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                FOREIGN KEY (video_id) REFERENCES videos(id) ON DELETE CASCADE
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         `);
 
-        // Add likes_count column to videos table if not exists (MySQL compatible way)
-        try {
-            const [columns] = await connection.query(`SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'videos' AND COLUMN_NAME = 'likes_count'`, [config.database]);
-            if (columns.length === 0) {
-                await connection.query(`ALTER TABLE videos ADD COLUMN likes_count INT DEFAULT 0`);
-                console.log('Added likes_count column to videos table');
-            }
-        } catch (e) {
-            // Column might already exist, ignore error
-            console.log('likes_count column check/add:', e.message);
-        }
-
-        // Create subscriptions table (subscribe to authors)
+        // ==================== 关注表 ====================
         await connection.query(`
             CREATE TABLE IF NOT EXISTS subscriptions (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 subscriber_id INT NOT NULL,
                 channel_id INT NOT NULL,
+                note VARCHAR(255) DEFAULT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE KEY unique_subscription (subscriber_id, channel_id),
                 INDEX idx_subscriber_id (subscriber_id),
@@ -386,31 +532,98 @@ async function initDatabase() {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         `);
 
-        // Add subscribers_count column to users table if not exists (MySQL compatible way)
-        try {
-            const [columns] = await connection.query(`SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'users' AND COLUMN_NAME = 'subscribers_count'`, [config.database]);
-            if (columns.length === 0) {
-                await connection.query(`ALTER TABLE users ADD COLUMN subscribers_count INT DEFAULT 0`);
-                console.log('Added subscribers_count column to users table');
+        // 添加用户表新字段
+        const userNewColumns = [
+            { name: 'bio', sql: 'ALTER TABLE users ADD COLUMN bio TEXT' },
+            { name: 'gender', sql: "ALTER TABLE users ADD COLUMN gender ENUM('male', 'female', 'other', 'secret') DEFAULT 'secret'" },
+            { name: 'following_count', sql: 'ALTER TABLE users ADD COLUMN following_count INT DEFAULT 0' },
+            { name: 'video_count', sql: 'ALTER TABLE users ADD COLUMN video_count INT DEFAULT 0' },
+            { name: 'total_views', sql: 'ALTER TABLE users ADD COLUMN total_views BIGINT DEFAULT 0' },
+            { name: 'status', sql: "ALTER TABLE users ADD COLUMN status ENUM('active', 'banned', 'inactive') DEFAULT 'active'" },
+            { name: 'last_login_ip', sql: 'ALTER TABLE users ADD COLUMN last_login_ip VARCHAR(45) DEFAULT NULL' },
+            { name: 'last_login_time', sql: 'ALTER TABLE users ADD COLUMN last_login_time DATETIME DEFAULT NULL' }
+        ];
+        
+        for (const col of userNewColumns) {
+            try {
+                const colName = col.name;
+                const [exists] = await connection.query(
+                    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'users' AND COLUMN_NAME = ?`,
+                    ['streamvibe', colName]
+                );
+                if (exists.length === 0) {
+                    await connection.query(col.sql);
+                }
+            } catch (e) {
+                // 忽略错误
             }
-        } catch (e) {
-            // Column might already exist, ignore error
-            console.log('subscribers_count column check/add:', e.message);
         }
 
-        // Insert sample videos if table is empty
+        // ==================== 播放记录表 ====================
+        await connection.query(`
+            CREATE TABLE IF NOT EXISTS watch_history (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT NOT NULL,
+                video_id INT NOT NULL,
+                progress INT DEFAULT 0 COMMENT '进度（秒）',
+                duration INT DEFAULT 0,
+                completed TINYINT(1) DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY unique_watch (user_id, video_id),
+                INDEX idx_user_id (user_id),
+                INDEX idx_video_id (video_id),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (video_id) REFERENCES videos(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+
+        // ==================== AI任务表 ====================
+        await connection.query(`
+            CREATE TABLE IF NOT EXISTS ai_jobs (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                job_id VARCHAR(64) UNIQUE NOT NULL,
+                user_id INT DEFAULT NULL,
+                type ENUM('video', 'image', 'audio') NOT NULL,
+                status ENUM('PENDING', 'RUNNING', 'SUCCESS', 'FAILED') DEFAULT 'PENDING',
+                prompt TEXT,
+                negative_prompt TEXT,
+                params JSON,
+                result_url VARCHAR(500) DEFAULT NULL,
+                result_data JSON DEFAULT NULL,
+                error_message TEXT DEFAULT NULL,
+                progress INT DEFAULT 0,
+                task_id VARCHAR(100) DEFAULT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                completed_at DATETIME DEFAULT NULL,
+                INDEX idx_job_id (job_id),
+                INDEX idx_user_id (user_id),
+                INDEX idx_type (type),
+                INDEX idx_status (status)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+
+        // ==================== 创建管理员 ====================
+        const [adminExists] = await connection.query('SELECT id FROM users WHERE username = ?', ['admin']);
+        if (adminExists.length === 0) {
+            const hashedPassword = await bcrypt.hash(config.adminPassword, 10);
+            await connection.query(
+                'INSERT INTO users (username, nickname, email, password, role) VALUES (?, ?, ?, ?, ?)',
+                ['admin', '管理员', 'admin@streamvibe.com', hashedPassword, 'admin']
+            );
+            logger.info(`Admin user created: admin / ${config.adminPassword}`);
+        }
+
+        // ==================== 插入示例数据 ====================
         const [videoCount] = await connection.query('SELECT COUNT(*) as count FROM videos');
         if (videoCount[0].count === 0) {
             const sampleVideos = [
-                ['星际穿越：平行宇宙的无限可能', '一部震撼人心的科幻巨制，探索宇宙的奥秘', '/uploads/video-1778924984288-720925202.mp4', 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=800&q=80', '9:56', 'movie', JSON.stringify(['科幻', '冒险', '太空']), '4K'],
-                ['灌篮高手：全国大赛篇', '青春热血的篮球故事', '/uploads/video-1778955707253-339412962.mp4', 'https://images.unsplash.com/photo-1546519638-68e109498ffc?w=800&q=80', '10:53', 'anime', JSON.stringify(['运动', '热血', '青春']), '1080P'],
-                ['速度与激情10：终极对决', '肾上腺素飙升的飙车盛宴', '/uploads/video-1778924984288-720925202.mp4', 'https://images.unsplash.com/photo-1504805572947-34fad45aed93?w=800&q=80', '0:15', 'movie', JSON.stringify(['动作', '赛车', '惊险']), '4K'],
-                ['甄嬛传：宫廷恩怨', '经典宫斗大戏', '/uploads/video-1778955707253-339412962.mp4', 'https://images.unsplash.com/photo-1518676590629-3dcbd9c5a5c9?w=800&q=80', '0:15', 'drama', JSON.stringify(['宫斗', '历史', '爱情']), '1080P'],
-                ['地球脉动：自然奇观', '探索大自然的奥秘', '/uploads/video-1778924984288-720925202.mp4', 'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=800&q=80', '1:00', 'documentary', JSON.stringify(['自然', '科普', '纪录']), '4K'],
-                ['蜘蛛侠：多元宇宙', '穿梭多元宇宙的英雄故事', '/uploads/video-1778955707253-339412962.mp4', 'https://images.unsplash.com/photo-1509347528160-9a9e33742cdb?w=800&q=80', '0:15', 'movie', JSON.stringify(['超级英雄', '科幻', '动作']), '4K'],
-                ['向往的生活：田园时光', '远离喧嚣的田园生活', '/uploads/video-1778924984288-720925202.mp4', 'https://images.unsplash.com/photo-1500382017468-9049fed747ef?w=800&q=80', '0:15', 'variety', JSON.stringify(['慢综艺', '生活', '治愈']), '1080P'],
-                ['周杰伦：经典演唱会', '华语乐坛天王演唱会', '/uploads/video-1778955707253-339412962.mp4', 'https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=800&q=80', '14:48', 'music', JSON.stringify(['演唱会', '音乐', '流行']), '4K'],
-                ['NBA总决赛精彩集锦', '篮球巅峰对决', '/uploads/video-1778924984288-720925202.mp4', 'https://images.unsplash.com/photo-1546519638-68e109498ffc?w=800&q=80', '0:11', 'sports', JSON.stringify(['篮球', '体育', 'NBA']), '1080P']
+                ['v' + Date.now() + '1', '星际穿越：平行宇宙的无限可能', '一部震撼人心的科幻巨制，探索宇宙的奥秘', '/uploads/video-1778924984288-720925202.mp4', 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=800&q=80', '9:56', 596, 'movie', JSON.stringify(['科幻', '冒险', '太空']), '4K'],
+                ['v' + Date.now() + '2', '灌篮高手：全国大赛篇', '青春热血的篮球故事', '/uploads/video-1778955707253-339412962.mp4', 'https://images.unsplash.com/photo-1546519638-68e109498ffc?w=800&q=80', '10:53', 653, 'anime', JSON.stringify(['运动', '热血', '青春']), '1080P'],
+                ['v' + Date.now() + '3', '速度与激情10：终极对决', '肾上腺素飙升的飙车盛宴', '/uploads/video-1778924984288-720925202.mp4', 'https://images.unsplash.com/photo-1504805572947-34fad45aed93?w=800&q=80', '15', 15, 'movie', JSON.stringify(['动作', '赛车', '惊险']), '4K'],
+                ['v' + Date.now() + '4', '甄嬛传：宫廷恩怨', '经典宫斗大戏', '/uploads/video-1778955707253-339412962.mp4', 'https://images.unsplash.com/photo-1518676590629-3dcbd9c5a5c9?w=800&q=80', '15', 15, 'drama', JSON.stringify(['宫斗', '历史', '爱情']), '1080P'],
+                ['v' + Date.now() + '5', '地球脉动：自然奇观', '探索大自然的奥秘', '/uploads/video-1778924984288-720925202.mp4', 'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=800&q=80', '1:00', 60, 'documentary', JSON.stringify(['自然', '科普', '纪录']), '4K']
             ];
             
             const [adminUser] = await connection.query('SELECT id FROM users WHERE username = ?', ['admin']);
@@ -418,15 +631,40 @@ async function initDatabase() {
             
             for (const video of sampleVideos) {
                 await connection.query(
-                    'INSERT INTO videos (title, description, video_url, thumbnail_url, duration, category, tags, quality, user_id, views) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                    [...video, adminId, Math.floor(Math.random() * 10000000)]
+                    'INSERT INTO videos (video_id, title, description, video_url, thumbnail_url, duration, duration_seconds, category, tags, quality, user_id, views, likes_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    [...video, adminId, Math.floor(Math.random() * 10000000), Math.floor(Math.random() * 50000)]
                 );
             }
-            console.log('Sample videos inserted');
+            logger.info('Sample videos inserted');
+        }
+
+        // ==================== 同步统计字段 ====================
+        // 同步视频点赞数
+        try {
+            await connection.query(`
+                UPDATE videos v
+                SET likes_count = (
+                    SELECT COUNT(*) FROM likes l WHERE l.video_id = v.id
+                )
+            `);
+        } catch (e) {
+            logger.warn('Failed to sync likes_count:', e.message);
+        }
+
+        // 同步用户粉丝数
+        try {
+            await connection.query(`
+                UPDATE users u
+                SET subscribers_count = (
+                    SELECT COUNT(*) FROM subscriptions s WHERE s.channel_id = u.id
+                )
+            `);
+        } catch (e) {
+            logger.warn('Failed to sync subscribers_count:', e.message);
         }
 
         await connection.end();
-        console.log('Database initialized successfully');
+        logger.info('Database initialized successfully');
     } catch (error) {
         console.error('Database initialization error:', error.message);
         throw error;
@@ -2476,6 +2714,172 @@ app.get('/api/search', async (req, res) => {
             success: false,
             message: '服务器错误'
         });
+    }
+});
+
+// Update user profile
+app.put('/api/users/profile', authenticate, async (req, res) => {
+    try {
+        const userId = req.userId;
+        const { nickname, email, phone, bio, gender, birthday, avatar_url } = req.body;
+        
+        // Build update query dynamically
+        const updates = [];
+        const values = [];
+        
+        if (nickname !== undefined) {
+            updates.push('nickname = ?');
+            values.push(nickname);
+        }
+        if (email !== undefined) {
+            updates.push('email = ?');
+            values.push(email);
+        }
+        if (phone !== undefined) {
+            updates.push('phone = ?');
+            values.push(phone);
+        }
+        if (bio !== undefined) {
+            updates.push('bio = ?');
+            values.push(bio);
+        }
+        if (gender !== undefined) {
+            updates.push('gender = ?');
+            values.push(gender);
+        }
+        if (birthday !== undefined) {
+            updates.push('birthday = ?');
+            values.push(birthday);
+        }
+        if (avatar_url !== undefined) {
+            updates.push('avatar_url = ?');
+            values.push(avatar_url);
+        }
+        
+        if (updates.length === 0) {
+            return res.status(400).json({ success: false, message: '没有要更新的字段' });
+        }
+        
+        values.push(userId);
+        
+        await pool.query(
+            `UPDATE users SET ${updates.join(', ')} WHERE id = ?`,
+            values
+        );
+        
+        // Get updated user data
+        const [users] = await pool.query(
+            'SELECT id, username, nickname, email, phone, avatar_url, bio, gender, birthday, subscribers_count, following_count, video_count, total_views, role, created_at FROM users WHERE id = ?',
+            [userId]
+        );
+        
+        res.json({ success: true, message: '资料更新成功', user: users[0] });
+    } catch (error) {
+        console.error('Update profile error:', error);
+        res.status(500).json({ success: false, message: '更新资料失败' });
+    }
+});
+
+// Get user profile (full info)
+app.get('/api/users/profile', authenticate, async (req, res) => {
+    try {
+        const userId = req.userId;
+        
+        const [users] = await pool.query(
+            'SELECT id, username, nickname, email, phone, avatar_url, bio, gender, birthday, subscribers_count, following_count, video_count, total_views, role, status, last_login_ip, last_login_time, created_at FROM users WHERE id = ?',
+            [userId]
+        );
+        
+        if (users.length === 0) {
+            return res.status(404).json({ success: false, message: '用户不存在' });
+        }
+        
+        res.json({ success: true, user: users[0] });
+    } catch (error) {
+        console.error('Get profile error:', error);
+        res.status(500).json({ success: false, message: '获取资料失败' });
+    }
+});
+
+// Get user comments
+app.get('/api/users/:id/comments', async (req, res) => {
+    try {
+        const userId = parseInt(req.params.id);
+        const { page = 1, limit = 20 } = req.query;
+        
+        const offset = (parseInt(page) - 1) * parseInt(limit);
+        
+        // Get comments with video info
+        const [comments] = await pool.query(`
+            SELECT c.*, v.title as video_title, v.thumbnail_url as video_thumbnail, v.video_url as video_url,
+                   u.username as uploader_name, u.nickname as uploader_nickname, u.avatar_url as uploader_avatar
+            FROM comments c
+            LEFT JOIN videos v ON c.video_id = v.id
+            LEFT JOIN users u ON c.user_id = u.id
+            WHERE c.user_id = ? AND c.is_deleted = 0
+            ORDER BY c.created_at DESC
+            LIMIT ? OFFSET ?
+        `, [userId, parseInt(limit), offset]);
+        
+        // Get total count
+        const [countResult] = await pool.query(
+            'SELECT COUNT(*) as total FROM comments WHERE user_id = ? AND is_deleted = 0',
+            [userId]
+        );
+        
+        const baseUrl = getBaseUrl(req);
+        const commentsWithFullUrl = comments.map(comment => ({
+            ...comment,
+            video_thumbnail: comment.video_thumbnail ? (comment.video_thumbnail.startsWith('http') ? comment.video_thumbnail : baseUrl + comment.video_thumbnail) : null,
+            video_url: comment.video_url ? (comment.video_url.startsWith('http') ? comment.video_url : baseUrl + comment.video_url) : null
+        }));
+        
+        res.json({
+            success: true,
+            comments: commentsWithFullUrl,
+            pagination: {
+                page: parseInt(page),
+                limit: parseInt(limit),
+                total: countResult[0].total,
+                totalPages: Math.ceil(countResult[0].total / parseInt(limit))
+            }
+        });
+    } catch (error) {
+        console.error('Get user comments error:', error);
+        res.status(500).json({ success: false, message: '获取评论失败' });
+    }
+});
+
+// Delete user comment
+app.delete('/api/comments/:id', authenticate, async (req, res) => {
+    try {
+        const commentId = parseInt(req.params.id);
+        const userId = req.userId;
+        
+        // Check if comment exists and belongs to user
+        const [comments] = await pool.query(
+            'SELECT user_id FROM comments WHERE id = ?',
+            [commentId]
+        );
+        
+        if (comments.length === 0) {
+            return res.status(404).json({ success: false, message: '评论不存在' });
+        }
+        
+        if (comments[0].user_id !== userId) {
+            return res.status(403).json({ success: false, message: '无权删除此评论' });
+        }
+        
+        // Soft delete
+        await pool.query(
+            'UPDATE comments SET is_deleted = 1, content = "此评论已删除" WHERE id = ?',
+            [commentId]
+        );
+        
+        res.json({ success: true, message: '评论已删除' });
+    } catch (error) {
+        console.error('Delete comment error:', error);
+        res.status(500).json({ success: false, message: '删除评论失败' });
     }
 });
 

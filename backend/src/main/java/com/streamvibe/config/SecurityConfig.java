@@ -3,6 +3,7 @@ package com.streamvibe.config;
 import com.streamvibe.service.CustomUserDetailsService;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.AuthenticationProvider;
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
@@ -43,8 +44,17 @@ public class SecurityConfig {
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
+                // 公开访问的接口
                 .requestMatchers("/api/auth/**").permitAll()
-                .requestMatchers("/api/**").authenticated()
+                .requestMatchers(HttpMethod.GET, "/api/videos/**").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/videos").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/comments/video/**").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/users/{id}").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/categories/**").permitAll()
+                // 需要登录的接口
+                .requestMatchers(HttpMethod.POST, "/api/**").authenticated()
+                .requestMatchers(HttpMethod.PUT, "/api/**").authenticated()
+                .requestMatchers(HttpMethod.DELETE, "/api/**").authenticated()
                 .anyRequest().permitAll()
             )
             .authenticationProvider(authenticationProvider())
@@ -56,10 +66,11 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOrigins(List.of("http://localhost:5173", "http://localhost:3000"));
+        configuration.setAllowedOriginPatterns(List.of("*"));
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("*"));
         configuration.setAllowCredentials(true);
+        configuration.setMaxAge(3600L);
         
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
