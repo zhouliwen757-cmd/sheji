@@ -1,0 +1,6 @@
+Added likes_count column to videos table
+Added subscribers_count column to users table
+Database initialized successfully
+Server running at http://localhost:3000
+Login page: http://localhost:3000/login
+Register page: http://localhost:3000/register
