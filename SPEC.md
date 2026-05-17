@@ -1,4 +1,4 @@
-# 异世界视频平台规范
+# StreamVibe 视频平台规范
 
 ## 1. Concept & Vision
 
@@ -93,7 +93,7 @@ TextMuted:   #64748b (中灰文字)
 - **视频卡片展示**：悬停显示播放按钮和时长
 - **分类筛选**：点击标签过滤视频列表
 - **搜索功能**：实时搜索，匹配标题和标签
-- **视频播放**：点击跳转播放页面（模拟）
+- **视频播放**：点击跳转播放页面
 - **收藏功能**：心形按钮添加/移除收藏
 - **点赞功能**：喜欢按钮点赞/取消点赞
 - **订阅功能**：订阅创作者
@@ -166,9 +166,16 @@ TextMuted:   #64748b (中灰文字)
 - **HTTP 客户端**：Axios
 - **构建工具**：Vite
 
-### 后端技术栈
-- **框架**：Express.js
+### 后端技术栈（双后端架构）
+
+#### Java Spring Boot 后端 (端口 8080)
+- **框架**：Spring Boot 3.x
+- **ORM**：Spring Data JPA
+- **安全**：Spring Security + JWT
 - **数据库**：MySQL
+
+#### Node.js 服务 (端口 3000)
+- **框架**：Express.js
 - **认证**：JWT
 - **文件上传**：Multer
 - **密码加密**：bcryptjs
@@ -181,36 +188,41 @@ TextMuted:   #64748b (中灰文字)
 
 ### API 设计
 
-#### 认证 API
+#### 认证 API (Node.js 端口3000)
 | 接口 | 方法 | 说明 |
 |------|------|------|
 | `/api/auth/register` | POST | 用户注册 |
 | `/api/auth/login` | POST | 用户登录 |
 | `/api/auth/logout` | POST | 用户登出 |
 
-#### 用户 API
+#### 用户 API (Java 端口8080)
 | 接口 | 方法 | 说明 |
 |------|------|------|
 | `/api/users/:id` | GET | 获取用户信息 |
+| `/api/users/:id/profile` | GET | 获取用户详情 |
+| `/api/users/:id/videos` | GET | 获取用户视频列表 |
 | `/api/users/:id/subscribers` | GET | 获取粉丝数 |
 
 #### 视频 API
 | 接口 | 方法 | 说明 |
 |------|------|------|
-| `/api/videos` | GET | 获取视频列表（支持分页、分类） |
-| `/api/videos/:id` | GET | 获取视频详情 |
-| `/api/videos` | POST | 上传视频 |
+| `/api/videos` (Node:3000) | GET | 获取视频列表 |
+| `/api/videos` (Node:3000) | POST | 上传视频 |
+| `/api/v1/videos` (Java:8080) | GET | 获取视频列表 |
+| `/api/v1/videos/:id` (Java:8080) | GET | 获取视频详情 |
+| `/api/v1/videos/user/:userId` (Java:8080) | GET | 获取用户视频 |
+| `/api/v1/videos/hot` (Java:8080) | GET | 获取热门视频 |
 | `/api/videos/:id/comments` | GET/POST | 获取/添加评论 |
 | `/api/search` | GET | 搜索视频 |
 
-#### 收藏/点赞/订阅 API
+#### 收藏/点赞/订阅 API (Java 端口8080)
 | 接口 | 方法 | 说明 |
 |------|------|------|
-| `/api/favorites` | GET/POST/DELETE | 收藏操作 |
-| `/api/likes` | GET/POST/DELETE | 点赞操作 |
-| `/api/subscriptions` | GET/POST/DELETE | 订阅操作 |
+| `/api/v1/favorites` | GET/POST/DELETE | 收藏操作 |
+| `/api/v1/likes` | GET/POST/DELETE | 点赞操作 |
+| `/api/v1/subscriptions` | GET/POST/DELETE | 订阅操作 |
 
-#### AI 创作 API
+#### AI 创作 API (Node.js 端口3000)
 | 接口 | 方法 | 说明 |
 |------|------|------|
 | `/api/ai/status` | GET | 获取 AI 服务状态 |
@@ -218,7 +230,7 @@ TextMuted:   #64748b (中灰文字)
 | `/api/ai/image` | POST | 文生图片 |
 | `/api/ai/status/:jobId` | GET | 查询任务状态 |
 
-#### 管理后台 API
+#### 管理后台 API (Java 端口8080)
 | 接口 | 方法 | 说明 |
 |------|------|------|
 | `/api/admin/stats` | GET | 获取统计数据 |
@@ -230,43 +242,60 @@ TextMuted:   #64748b (中灰文字)
 
 ```
 sheji/
-├── frontend/                    # Vue 前端项目
+├── frontend/                    # Vue 3 前端项目
 │   ├── src/
 │   │   ├── api/               # API 请求模块
-│   │   │   └── index.js       # 统一 API 封装
 │   │   ├── assets/
 │   │   │   └── styles/
 │   │   │       └── main.css   # 全局样式 + 主题变量
 │   │   ├── components/        # 可复用组件
-│   │   │   ├── Navbar.vue
-│   │   │   ├── VideoCard.vue
-│   │   │   ├── Toast.vue
-│   │   │   └── SkeletonLoader.vue
 │   │   ├── composables/       # 组合式函数
-│   │   │   ├── useTheme.js    # 主题管理
-│   │   │   └── useToast.js
 │   │   ├── router/            # 路由配置
-│   │   │   └── index.js
 │   │   ├── stores/            # Pinia 状态管理
-│   │   │   ├── auth.js
-│   │   │   ├── video.js
-│   │   │   └── user.js
 │   │   ├── views/             # 页面组件
-│   │   │   ├── HomePage.vue
-│   │   │   ├── VideoPage.vue
-│   │   │   ├── AICreatePage.vue
-│   │   │   └── NotFoundPage.vue
 │   │   ├── App.vue
 │   │   └── main.js
 │   └── package.json
 │
-├── server.js                  # Express 后端入口
-├── uploads/                   # 上传文件目录
-├── package.json               # 后端依赖
-└── SPEC.md                    # 项目规范文档
+├── backend/                     # Java Spring Boot 后端 (端口 8080)
+│   ├── src/main/java/com/streamvibe/
+│   │   ├── controller/        # 控制器
+│   │   ├── service/          # 业务逻辑
+│   │   ├── repository/       # 数据访问
+│   │   ├── entity/           # 实体类
+│   │   ├── dto/              # 数据传输对象
+│   │   └── config/           # 配置类
+│   ├── src/main/resources/
+│   │   └── application.yml   # Spring Boot 配置
+│   ├── pom.xml
+│   └── mvnw
+│
+├── server.js                   # Node.js Express 服务 (端口 3000)
+├── database.sql                # MySQL 数据库结构
+├── uploads/                    # 上传文件目录
+├── package.json                # Node.js 依赖
+└── SPEC.md                     # 项目规范文档
 ```
 
-## 8. 优化记录
+## 8. 数据库表结构
+
+### 核心表
+| 表名 | 说明 |
+|------|------|
+| users | 用户表 |
+| videos | 视频表 |
+| comments | 评论表 |
+| likes | 点赞表 |
+| favorites | 收藏表 |
+| collections | 收藏夹表 |
+| subscriptions | 关注表 |
+| watch_history | 播放记录表 |
+| categories | 视频分类表 |
+| tags | 标签表 |
+| video_tags | 视频标签关联表 |
+| ai_jobs | AI创作任务表 |
+
+## 9. 优化记录
 
 ### 2026-05-17 优化项
 1. **前端 API 模块优化**
@@ -298,3 +327,8 @@ sheji/
    - 图片懒加载减少初始加载时间
    - 骨架屏提升感知性能
    - 友好的 404 页面
+
+### 2026-05-17 双后端架构
+- **Java Spring Boot 后端**：RESTful API，JPA 数据库操作
+- **Node.js 服务**：AI 创作、视频上传等 Node 专长功能
+- **完整启动器**：一键启动所有服务
